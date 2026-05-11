@@ -38,10 +38,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 @keyframes fadeIn{to{opacity:1}}
 .card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:24px;margin-bottom:20px}
 .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.title{font-family:'Courier New',monospace;font-style:italic;font-size:28px;color:#9B59B6}
-.health-badge{background:rgba(76,175,80,0.2);color:#4CAF50;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600}
-.health-badge.loading{background:rgba(155,89,182,0.2);color:#9B59B6}
-.health-badge.error{background:rgba(239,83,80,0.2);color:#ef5350}
+.title{font-family:'Courier New',monospace;font-size:28px;color:#9B59B6;font-weight:700}
+.health{font-family:'Courier New',monospace;font-size:13px;color:#555;display:flex;align-items:center;gap:6px}
+.health .d{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
+.health .d.on{background:#4CAF50}
 .subtitle{color:#888;font-size:14px;margin-bottom:24px}
 .gauge-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:20px}
 .gauge-card{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;text-align:center}
@@ -88,7 +88,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <div class="card">
 <div class="header">
 <div class="title">Alpha Vantage</div>
-<div class="health-badge loading" id="health">\\u2022 \\u2022 \\u2022</div>
+<div class="health"><span class="d" id="dot"></span><span id="health-text">connecting...</span></div>
 </div>
 <div class="subtitle">50+ technical indicators, forex pairs, intraday data</div>
 
@@ -134,16 +134,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 let currentIndicator = 'RSI';
 
 async function fetchHealth() {
+  const t0 = Date.now();
   try {
-    const res = await fetch('/health');
-    const data = await res.json();
-    const badge = document.getElementById('health');
-    badge.textContent = '\\u2713 Healthy';
-    badge.className = 'health-badge';
+    await fetch('/health');
+    const ms = Date.now() - t0;
+    document.getElementById('dot').classList.add('on');
+    document.getElementById('health-text').textContent = 'online \\u00B7 ' + ms + 'ms';
   } catch (e) {
-    const badge = document.getElementById('health');
-    badge.textContent = '\\u2717 Error';
-    badge.className = 'health-badge error';
+    document.getElementById('health-text').textContent = 'offline';
   }
 }
 
