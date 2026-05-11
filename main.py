@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -18,6 +19,9 @@ http_client: Optional[httpx.AsyncClient] = None
 _cache: dict[str, tuple[float, dict]] = {}
 CACHE_TTL = 3600  # 1 hour
 
+# Dashboard data lives here — updated by background task
+_dashboard_data: dict = {"rsi": None, "macd": None, "bbands": None, "forex": [], "status": "warming_up"}
+
 
 def _cache_get(key: str):
     entry = _cache.get(key)
@@ -30,11 +34,109 @@ def _cache_set(key: str, value: dict):
     _cache[key] = (time.time(), value)
 
 
+async def _bg_fetch(params: dict):
+    """Single upstream call, returns parsed JSON or None."""
+    key = ALPHA_VANTAGE_API_KEY or os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+    if not key:
+        return None
+    params["apikey"] = key
+    try:
+        resp = await http_client.get(BASE_URL, params=params, timeout=25.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "Error Message" not in data and "Note" not in data:
+                info = data.get("Information", "")
+                if "rate" not in info.lower():
+                    return data
+    except Exception:
+        pass
+    return None
+
+
+async def _refresh_dashboard():
+    """Background task: fetches dashboard data on startup, then every hour.
+    Makes 4 sequential upstream calls with 15s gaps to respect 5 calls/min."""
+    global _dashboard_data
+    await asyncio.sleep(5)  # Let server fully boot
+
+    while True:
+        result = {"rsi": None, "macd": None, "bbands": None, "forex": []}
+
+        # 1) RSI
+        data = await _bg_fetch({"function": "RSI", "symbol": "AAPL", "interval": "daily",
+                                "time_period": "14", "series_type": "close"})
+        if data:
+            for k in data:
+                if "Technical Analysis" in k:
+                    pts = list(data[k].items())
+                    if pts:
+                        val = float(pts[0][1].get("RSI", 0))
+                        result["rsi"] = {"value": round(val, 1),
+                                         "signal": "Oversold" if val < 30 else "Overbought" if val > 70 else "Neutral"}
+                    break
+
+        await asyncio.sleep(15)
+
+        # 2) MACD
+        data = await _bg_fetch({"function": "MACD", "symbol": "AAPL", "interval": "daily",
+                                "series_type": "close"})
+        if data:
+            for k in data:
+                if "Technical Analysis" in k:
+                    pts = list(data[k].items())
+                    if pts:
+                        val = float(pts[0][1].get("MACD", 0))
+                        result["macd"] = {"value": round(val, 2),
+                                          "signal": "Bullish" if val > 0 else "Bearish"}
+                    break
+
+        await asyncio.sleep(15)
+
+        # 3) BBANDS
+        data = await _bg_fetch({"function": "BBANDS", "symbol": "AAPL", "interval": "daily",
+                                "time_period": "20", "series_type": "close"})
+        if data:
+            for k in data:
+                if "Technical Analysis" in k:
+                    pts = list(data[k].items())
+                    if pts:
+                        p = pts[0][1]
+                        result["bbands"] = {
+                            "upper": round(float(p.get("Real Upper Band", 0)), 2),
+                            "middle": round(float(p.get("Real Middle Band", 0)), 2),
+                            "lower": round(float(p.get("Real Lower Band", 0)), 2),
+                        }
+                    break
+
+        await asyncio.sleep(15)
+
+        # 4) EUR/USD forex
+        data = await _bg_fetch({"function": "CURRENCY_EXCHANGE_RATE",
+                                "from_currency": "EUR", "to_currency": "USD"})
+        if data:
+            rd = data.get("Realtime Currency Exchange Rate", {})
+            if rd:
+                result["forex"].append({
+                    "pair": "EUR/USD",
+                    "rate": round(float(rd.get("5. Exchange Rate", 0)), 4),
+                })
+
+        result["timestamp"] = datetime.now(timezone.utc).isoformat()
+        result["status"] = "ready"
+        _dashboard_data = result
+        _cache_set("dashboard", result)
+
+        # Sleep 1 hour before next refresh
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=30.0)
+    task = asyncio.create_task(_refresh_dashboard())
     yield
+    task.cancel()
     await http_client.aclose()
 
 
@@ -149,6 +251,45 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <script>
 let currentIndicator = 'RSI';
 
+function renderDashboard(dash) {
+  const container = document.getElementById('gauges');
+  const warming = dash.status === 'warming_up';
+
+  // RSI
+  const rsi = dash.rsi;
+  const rsiVal = rsi ? rsi.value : (warming ? '...' : 'N/A');
+  const rsiSig = rsi ? rsi.signal : (warming ? 'Warming up' : 'No data');
+  const rsiCls = rsi ? (rsi.value < 30 ? 'green' : rsi.value > 70 ? 'red' : 'neutral') : 'neutral';
+  const rsiProg = rsi ? rsi.value : 0;
+
+  // MACD
+  const macd = dash.macd;
+  const macdVal = macd ? ((macd.value > 0 ? '+' : '') + macd.value) : (warming ? '...' : 'N/A');
+  const macdSig = macd ? macd.signal : (warming ? 'Warming up' : 'No data');
+  const macdColor = macd && macd.value > 0 ? 'green' : 'red';
+  const macdCls = macd ? (macd.value > 0 ? 'green' : 'red') : 'neutral';
+
+  // BBANDS
+  const bb = dash.bbands;
+  const bbVal = bb ? ('$' + bb.upper + ' / $' + bb.lower) : (warming ? '...' : 'N/A');
+
+  container.innerHTML =
+    '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="gauge-value blue">' + rsiVal + '</div><div class="gauge-signal ' + rsiCls + '">' + rsiSig + '</div><div class="progress-bar"><div class="progress-fill blue" style="width:' + rsiProg + '%"></div></div></div>' +
+    '<div class="gauge-card ' + macdColor + '-border"><div class="gauge-label">MACD</div><div class="gauge-value ' + macdColor + '">' + macdVal + '</div><div class="gauge-signal ' + macdCls + '">' + macdSig + '</div><div class="progress-bar"><div class="progress-fill ' + macdColor + '" style="width:65%"></div></div></div>' +
+    '<div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="gauge-value red" style="font-size:20px">' + bbVal + '</div><div class="gauge-signal neutral">Band range</div><div class="progress-bar"><div class="progress-fill red" style="width:85%"></div></div></div>';
+
+  // Forex
+  const forexContainer = document.getElementById('forex');
+  if (dash.forex && dash.forex.length) {
+    forexContainer.innerHTML = '';
+    dash.forex.forEach(function(fx) {
+      forexContainer.innerHTML += '<div class="forex-row"><div class="forex-pair">' + fx.pair + '</div><div class="forex-rate">' + fx.rate.toFixed(4) + '</div><div class="forex-change neutral">\\u2014</div></div>';
+    });
+  } else {
+    forexContainer.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">' + (warming ? 'Warming up...' : 'No forex data') + '</div>';
+  }
+}
+
 async function init() {
   const t0 = Date.now();
   try {
@@ -160,46 +301,22 @@ async function init() {
     document.getElementById('health-text').textContent = 'offline';
   }
 
-  // All homepage data in one server-side call
+  // All homepage data from background-refreshed cache
   try {
     const dash = await fetch('/dashboard').then(r => r.json());
-    const container = document.getElementById('gauges');
-    container.innerHTML = '';
-
-    // RSI
-    const rsi = dash.rsi;
-    const rsiVal = rsi ? rsi.value : 'N/A';
-    const rsiSig = rsi ? rsi.signal : 'Error';
-    const rsiCls = rsi ? (rsi.value < 30 ? 'green' : rsi.value > 70 ? 'red' : 'neutral') : 'neutral';
-    const rsiProg = rsi ? rsi.value : 0;
-    container.innerHTML += '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="gauge-value blue">' + rsiVal + '</div><div class="gauge-signal ' + rsiCls + '">' + rsiSig + '</div><div class="progress-bar"><div class="progress-fill blue" style="width:' + rsiProg + '%"></div></div></div>';
-
-    // MACD
-    const macd = dash.macd;
-    const macdVal = macd ? ((macd.value > 0 ? '+' : '') + macd.value) : 'N/A';
-    const macdSig = macd ? macd.signal : 'Error';
-    const macdColor = macd && macd.value > 0 ? 'green' : 'red';
-    const macdCls = macd ? (macd.value > 0 ? 'green' : 'red') : 'neutral';
-    container.innerHTML += '<div class="gauge-card ' + macdColor + '-border"><div class="gauge-label">MACD</div><div class="gauge-value ' + macdColor + '">' + macdVal + '</div><div class="gauge-signal ' + macdCls + '">' + macdSig + '</div><div class="progress-bar"><div class="progress-fill ' + macdColor + '" style="width:65%"></div></div></div>';
-
-    // BBANDS
-    const bb = dash.bbands;
-    const bbVal = bb ? ('$' + bb.upper + ' / $' + bb.lower) : 'N/A';
-    container.innerHTML += '<div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="gauge-value red" style="font-size:20px">' + bbVal + '</div><div class="gauge-signal neutral">Band range</div><div class="progress-bar"><div class="progress-fill red" style="width:85%"></div></div></div>';
-
-    // Forex
-    const forexContainer = document.getElementById('forex');
-    forexContainer.innerHTML = '';
-    (dash.forex || []).forEach(function(fx) {
-      forexContainer.innerHTML += '<div class="forex-row"><div class="forex-pair">' + fx.pair + '</div><div class="forex-rate">' + fx.rate.toFixed(4) + '</div><div class="forex-change neutral">\\u2014</div></div>';
-    });
-    if (!dash.forex || !dash.forex.length) {
-      forexContainer.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">Forex data loading...</div>';
+    renderDashboard(dash);
+    // If still warming up, poll every 10s until ready
+    if (dash.status === 'warming_up') {
+      const poll = setInterval(async function() {
+        try {
+          const d2 = await fetch('/dashboard').then(r => r.json());
+          renderDashboard(d2);
+          if (d2.status === 'ready') clearInterval(poll);
+        } catch(e) { clearInterval(poll); }
+      }, 10000);
     }
   } catch (e) {
-    // Fallback: show error state
-    const container = document.getElementById('gauges');
-    container.innerHTML = '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="loading">Rate limited</div></div><div class="gauge-card green-border"><div class="gauge-label">MACD</div><div class="loading">Rate limited</div></div><div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="loading">Rate limited</div></div>';
+    document.getElementById('gauges').innerHTML = '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="loading">Unavailable</div></div><div class="gauge-card green-border"><div class="gauge-label">MACD</div><div class="loading">Unavailable</div></div><div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="loading">Unavailable</div></div>';
   }
 }
 
@@ -288,86 +405,9 @@ async def health():
 
 @app.get("/dashboard")
 async def dashboard():
-    """
-    Single endpoint for homepage data: RSI, MACD, BBANDS for AAPL + EUR/USD forex.
-    Sequential upstream calls with delays to respect Alpha Vantage rate limits (5/min).
-    Cached for 1 hour to avoid burning API quota.
-    """
-    import asyncio
-    cached = _cache_get("dashboard")
-    if cached:
-        return cached
-    result = {"rsi": None, "macd": None, "bbands": None, "forex": []}
-    key = _get_key()
-
-    async def _fetch(params):
-        params["apikey"] = key
-        try:
-            resp = await http_client.get(BASE_URL, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                if "Error Message" not in data and "Note" not in data:
-                    return data
-        except Exception:
-            pass
-        return None
-
-    # 1) RSI
-    data = await _fetch({"function": "RSI", "symbol": "AAPL", "interval": "daily", "time_period": "14", "series_type": "close"})
-    if data:
-        for key_name in data:
-            if "Technical Analysis" in key_name:
-                points = list(data[key_name].items())
-                if points:
-                    val = float(points[0][1].get("RSI", 0))
-                    result["rsi"] = {"value": round(val, 1), "signal": "Oversold" if val < 30 else "Overbought" if val > 70 else "Neutral"}
-                break
-
-    await asyncio.sleep(15)  # Alpha Vantage: 5 calls/min = 12s between calls
-
-    # 2) MACD
-    data = await _fetch({"function": "MACD", "symbol": "AAPL", "interval": "daily", "series_type": "close"})
-    if data:
-        for key_name in data:
-            if "Technical Analysis" in key_name:
-                points = list(data[key_name].items())
-                if points:
-                    val = float(points[0][1].get("MACD", 0))
-                    result["macd"] = {"value": round(val, 2), "signal": "Bullish" if val > 0 else "Bearish"}
-                break
-
-    await asyncio.sleep(15)
-
-    # 3) BBANDS
-    data = await _fetch({"function": "BBANDS", "symbol": "AAPL", "interval": "daily", "time_period": "20", "series_type": "close"})
-    if data:
-        for key_name in data:
-            if "Technical Analysis" in key_name:
-                points = list(data[key_name].items())
-                if points:
-                    p = points[0][1]
-                    result["bbands"] = {
-                        "upper": round(float(p.get("Real Upper Band", 0)), 2),
-                        "middle": round(float(p.get("Real Middle Band", 0)), 2),
-                        "lower": round(float(p.get("Real Lower Band", 0)), 2),
-                    }
-                break
-
-    await asyncio.sleep(15)
-
-    # 4) EUR/USD forex only (save API calls)
-    data = await _fetch({"function": "CURRENCY_EXCHANGE_RATE", "from_currency": "EUR", "to_currency": "USD"})
-    if data:
-        rate_data = data.get("Realtime Currency Exchange Rate", {})
-        if rate_data:
-            result["forex"].append({
-                "pair": "EUR/USD",
-                "rate": round(float(rate_data.get("5. Exchange Rate", 0)), 4),
-            })
-
-    result["timestamp"] = _ts()
-    _cache_set("dashboard", result)
-    return result
+    """Returns pre-fetched dashboard data instantly. Data is refreshed hourly
+    by a background task — no blocking upstream calls on this endpoint."""
+    return _dashboard_data
 
 
 @app.get("/quote")
