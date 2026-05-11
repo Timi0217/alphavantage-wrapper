@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -12,6 +13,21 @@ ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
 BASE_URL = "https://www.alphavantage.co/query"
 
 http_client: Optional[httpx.AsyncClient] = None
+
+# ── Simple TTL cache ─────────────────────────────────────────────────────
+_cache: dict[str, tuple[float, dict]] = {}
+CACHE_TTL = 3600  # 1 hour
+
+
+def _cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and time.time() - entry[0] < CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _cache_set(key: str, value: dict):
+    _cache[key] = (time.time(), value)
 
 
 @asynccontextmanager
@@ -275,8 +291,12 @@ async def dashboard():
     """
     Single endpoint for homepage data: RSI, MACD, BBANDS for AAPL + EUR/USD forex.
     Sequential upstream calls with delays to respect Alpha Vantage rate limits (5/min).
+    Cached for 1 hour to avoid burning API quota.
     """
     import asyncio
+    cached = _cache_get("dashboard")
+    if cached:
+        return cached
     result = {"rsi": None, "macd": None, "bbands": None, "forex": []}
     key = _get_key()
 
@@ -346,6 +366,7 @@ async def dashboard():
             })
 
     result["timestamp"] = _ts()
+    _cache_set("dashboard", result)
     return result
 
 
@@ -386,6 +407,11 @@ async def get_technical(
     if indicator_upper not in supported:
         raise HTTPException(status_code=400, detail=f"Unsupported indicator: {indicator}. Supported: {sorted(supported)}")
 
+    cache_key = f"technical:{symbol}:{indicator_upper}:{interval}:{time_period}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
     params = {
         "function": indicator_upper,
         "symbol": symbol,
@@ -420,7 +446,7 @@ async def get_technical(
 
     meta = data.get("Meta Data", {})
 
-    return {
+    resp = {
         "symbol": symbol,
         "indicator": indicator_upper,
         "interval": interval,
@@ -433,6 +459,8 @@ async def get_technical(
         },
         "timestamp": _ts(),
     }
+    _cache_set(cache_key, resp)
+    return resp
 
 
 @app.get("/intraday")
@@ -513,6 +541,11 @@ async def get_forex(
     to_currency: str = Query(..., description="To currency (e.g., EUR)"),
 ):
     """Get real-time forex exchange rate."""
+    cache_key = f"forex:{from_currency.upper()}:{to_currency.upper()}"
+    cached = _cache_get(cache_key)
+    if cached:
+        return cached
+
     data = await _av_request({
         "function": "CURRENCY_EXCHANGE_RATE",
         "from_currency": from_currency.upper(),
@@ -523,7 +556,7 @@ async def get_forex(
     if not rate_data:
         raise HTTPException(status_code=404, detail=f"No forex data for {from_currency}/{to_currency}")
 
-    return {
+    resp = {
         "from_currency": rate_data.get("1. From_Currency Code"),
         "from_name": rate_data.get("2. From_Currency Name"),
         "to_currency": rate_data.get("3. To_Currency Code"),
@@ -535,6 +568,8 @@ async def get_forex(
         "ask_price": float(rate_data.get("9. Ask Price", 0)),
         "timestamp": _ts(),
     }
+    _cache_set(cache_key, resp)
+    return resp
 
 
 @app.get("/search")
