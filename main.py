@@ -133,7 +133,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <script>
 let currentIndicator = 'RSI';
 
-async function fetchHealth() {
+async function init() {
   const t0 = Date.now();
   try {
     await fetch('/health');
@@ -143,164 +143,76 @@ async function fetchHealth() {
   } catch (e) {
     document.getElementById('health-text').textContent = 'offline';
   }
-}
 
-async function fetchRSI() {
+  // All homepage data in one server-side call
   try {
-    const res = await fetch('/technical?symbol=AAPL&indicator=RSI');
-    const data = await res.json();
-    if (data.data && data.data.length > 0) {
-      const value = data.data[0].RSI || 0;
-      const signal = value < 30 ? 'Oversold' : value > 70 ? 'Overbought' : 'Neutral';
-      const signalClass = value < 30 ? 'green' : value > 70 ? 'red' : 'neutral';
-      return { value: value.toFixed(1), signal, signalClass, progress: value, color: 'blue' };
+    const dash = await fetch('/dashboard').then(r => r.json());
+    const container = document.getElementById('gauges');
+    container.innerHTML = '';
+
+    // RSI
+    const rsi = dash.rsi;
+    const rsiVal = rsi ? rsi.value : 'N/A';
+    const rsiSig = rsi ? rsi.signal : 'Error';
+    const rsiCls = rsi ? (rsi.value < 30 ? 'green' : rsi.value > 70 ? 'red' : 'neutral') : 'neutral';
+    const rsiProg = rsi ? rsi.value : 0;
+    container.innerHTML += '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="gauge-value blue">' + rsiVal + '</div><div class="gauge-signal ' + rsiCls + '">' + rsiSig + '</div><div class="progress-bar"><div class="progress-fill blue" style="width:' + rsiProg + '%"></div></div></div>';
+
+    // MACD
+    const macd = dash.macd;
+    const macdVal = macd ? ((macd.value > 0 ? '+' : '') + macd.value) : 'N/A';
+    const macdSig = macd ? macd.signal : 'Error';
+    const macdColor = macd && macd.value > 0 ? 'green' : 'red';
+    const macdCls = macd ? (macd.value > 0 ? 'green' : 'red') : 'neutral';
+    container.innerHTML += '<div class="gauge-card ' + macdColor + '-border"><div class="gauge-label">MACD</div><div class="gauge-value ' + macdColor + '">' + macdVal + '</div><div class="gauge-signal ' + macdCls + '">' + macdSig + '</div><div class="progress-bar"><div class="progress-fill ' + macdColor + '" style="width:65%"></div></div></div>';
+
+    // BBANDS
+    const bb = dash.bbands;
+    const bbVal = bb ? ('$' + bb.upper + ' / $' + bb.lower) : 'N/A';
+    container.innerHTML += '<div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="gauge-value red" style="font-size:20px">' + bbVal + '</div><div class="gauge-signal neutral">Band range</div><div class="progress-bar"><div class="progress-fill red" style="width:85%"></div></div></div>';
+
+    // Forex
+    const forexContainer = document.getElementById('forex');
+    forexContainer.innerHTML = '';
+    (dash.forex || []).forEach(function(fx) {
+      forexContainer.innerHTML += '<div class="forex-row"><div class="forex-pair">' + fx.pair + '</div><div class="forex-rate">' + fx.rate.toFixed(4) + '</div><div class="forex-change neutral">\\u2014</div></div>';
+    });
+    if (!dash.forex || !dash.forex.length) {
+      forexContainer.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">Forex data loading...</div>';
     }
   } catch (e) {
-    return { value: 'N/A', signal: 'Error', signalClass: 'neutral', progress: 0, color: 'blue' };
+    // Fallback: show error state
+    const container = document.getElementById('gauges');
+    container.innerHTML = '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="loading">Rate limited</div></div><div class="gauge-card green-border"><div class="gauge-label">MACD</div><div class="loading">Rate limited</div></div><div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="loading">Rate limited</div></div>';
   }
-}
-
-async function fetchMACD() {
-  try {
-    const res = await fetch('/technical?symbol=AAPL&indicator=MACD');
-    const data = await res.json();
-    if (data.data && data.data.length > 0) {
-      const value = data.data[0].MACD || 0;
-      const signal = value > 0 ? 'Bullish' : 'Bearish';
-      const signalClass = value > 0 ? 'green' : 'red';
-      const displayValue = (value > 0 ? '+' : '') + value.toFixed(2);
-      return { value: displayValue, signal, signalClass, progress: 65, color: value > 0 ? 'green' : 'red' };
-    }
-  } catch (e) {
-    return { value: 'N/A', signal: 'Error', signalClass: 'neutral', progress: 0, color: 'green' };
-  }
-}
-
-async function fetchBBANDS() {
-  try {
-    const res = await fetch('/technical?symbol=AAPL&indicator=BBANDS');
-    const data = await res.json();
-    if (data.data && data.data.length > 0) {
-      const point = data.data[0];
-      const upper = point['Real Upper Band'] || 0;
-      const middle = point['Real Middle Band'] || 0;
-      const lower = point['Real Lower Band'] || 0;
-
-      // Assume close is near middle for demo
-      const signal = 'Overbought';
-      const signalClass = 'red';
-      const displayValue = 'Upper';
-      return { value: displayValue, signal, signalClass, progress: 85, color: 'red' };
-    }
-  } catch (e) {
-    return { value: 'N/A', signal: 'Error', signalClass: 'neutral', progress: 0, color: 'red' };
-  }
-}
-
-async function fetchForex() {
-  const pairs = [
-    { from: 'EUR', to: 'USD', name: 'EUR/USD' },
-    { from: 'GBP', to: 'USD', name: 'GBP/USD' },
-    { from: 'USD', to: 'JPY', name: 'USD/JPY' },
-    { from: 'USD', to: 'CHF', name: 'USD/CHF' }
-  ];
-
-  const forexContainer = document.getElementById('forex');
-  forexContainer.innerHTML = '';
-
-  for (const pair of pairs) {
-    try {
-      const res = await fetch(`/forex?from_currency=${pair.from}&to_currency=${pair.to}`);
-      const data = await res.json();
-      const rate = data.exchange_rate || 0;
-
-      const row = document.createElement('div');
-      row.className = 'forex-row';
-      row.innerHTML = `
-        <div class="forex-pair">${pair.name}</div>
-        <div class="forex-rate">${rate.toFixed(4)}</div>
-        <div class="forex-change neutral">\\u2014</div>
-      `;
-      forexContainer.appendChild(row);
-    } catch (e) {
-      const row = document.createElement('div');
-      row.className = 'forex-row';
-      row.innerHTML = `
-        <div class="forex-pair">${pair.name}</div>
-        <div class="forex-rate" style="color:#ef5350">Error</div>
-        <div class="forex-change neutral">\\u2014</div>
-      `;
-      forexContainer.appendChild(row);
-    }
-  }
-}
-
-async function updateGauges() {
-  const [rsi, macd, bbands] = await Promise.all([fetchRSI(), fetchMACD(), fetchBBANDS()]);
-
-  const gauges = [
-    { data: rsi, label: 'RSI (14)', borderClass: 'blue-border' },
-    { data: macd, label: 'MACD', borderClass: macd.color === 'green' ? 'green-border' : 'red-border' },
-    { data: bbands, label: 'BOLLINGER', borderClass: 'red-border' }
-  ];
-
-  const container = document.getElementById('gauges');
-  container.innerHTML = '';
-
-  gauges.forEach(({ data, label, borderClass }) => {
-    const card = document.createElement('div');
-    card.className = `gauge-card ${borderClass}`;
-    card.innerHTML = `
-      <div class="gauge-label">${label}</div>
-      <div class="gauge-value ${data.color}">${data.value}</div>
-      <div class="gauge-signal ${data.signalClass}">${data.signal}</div>
-      <div class="progress-bar">
-        <div class="progress-fill ${data.color}" style="width:${data.progress}%"></div>
-      </div>
-    `;
-    container.appendChild(card);
-  });
 }
 
 function setIndicator(indicator) {
   currentIndicator = indicator;
-  document.getElementById('result').innerHTML = `<div style="color:#9B59B6;font-size:12px;margin-top:8px">Selected: ${indicator}</div>`;
+  document.getElementById('result').innerHTML = '<div style="color:#9B59B6;font-size:12px;margin-top:8px">Selected: ' + indicator + '</div>';
 }
 
 async function fetchIndicator() {
   const symbol = document.getElementById('symbolInput').value.trim().toUpperCase() || 'AAPL';
   const resultDiv = document.getElementById('result');
-
   resultDiv.innerHTML = '<div class="loading">Fetching...</div>';
-
   try {
-    const res = await fetch(`/technical?symbol=${symbol}&indicator=${currentIndicator}`);
+    const res = await fetch('/technical?symbol=' + symbol + '&indicator=' + currentIndicator);
     const data = await res.json();
-
     if (data.data && data.data.length > 0) {
       const point = data.data[0];
-      const keys = Object.keys(point).filter(k => k !== 'date');
-      const valueStr = keys.map(k => `${k}: ${typeof point[k] === 'number' ? point[k].toFixed(2) : point[k]}`).join(', ');
-
-      resultDiv.innerHTML = `
-        <div style="margin-top:12px;padding:12px;background:rgba(155,89,182,0.1);border-radius:8px;font-size:12px">
-          <div style="color:#9B59B6;font-weight:600;margin-bottom:4px">${symbol} - ${currentIndicator}</div>
-          <div style="color:#ccc">${valueStr}</div>
-          <div style="color:#666;margin-top:4px;font-size:11px">Date: ${point.date}</div>
-        </div>
-      `;
+      const keys = Object.keys(point).filter(function(k) { return k !== 'date'; });
+      const valueStr = keys.map(function(k) { return k + ': ' + (typeof point[k] === 'number' ? point[k].toFixed(2) : point[k]); }).join(', ');
+      resultDiv.innerHTML = '<div style="margin-top:12px;padding:12px;background:rgba(155,89,182,0.1);border-radius:8px;font-size:12px"><div style="color:#9B59B6;font-weight:600;margin-bottom:4px">' + symbol + ' - ' + currentIndicator + '</div><div style="color:#ccc">' + valueStr + '</div><div style="color:#666;margin-top:4px;font-size:11px">Date: ' + point.date + '</div></div>';
     } else {
       resultDiv.innerHTML = '<div class="error-msg">No data available</div>';
     }
   } catch (e) {
-    resultDiv.innerHTML = `<div class="error-msg">Error: ${e.message || 'Failed to fetch'}</div>`;
+    resultDiv.innerHTML = '<div class="error-msg">Error fetching data</div>';
   }
 }
 
-// Initialize
-fetchHealth();
-updateGauges();
-fetchForex();
+init();
 </script>
 </body>
 </html>
@@ -356,6 +268,85 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy", "timestamp": _ts()}
+
+
+@app.get("/dashboard")
+async def dashboard():
+    """
+    Single endpoint for homepage data: RSI, MACD, BBANDS for AAPL + EUR/USD forex.
+    Sequential upstream calls with delays to respect Alpha Vantage rate limits (5/min).
+    """
+    import asyncio
+    result = {"rsi": None, "macd": None, "bbands": None, "forex": []}
+    key = _get_key()
+
+    async def _fetch(params):
+        params["apikey"] = key
+        try:
+            resp = await http_client.get(BASE_URL, params=params)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "Error Message" not in data and "Note" not in data:
+                    return data
+        except Exception:
+            pass
+        return None
+
+    # 1) RSI
+    data = await _fetch({"function": "RSI", "symbol": "AAPL", "interval": "daily", "time_period": "14", "series_type": "close"})
+    if data:
+        for key_name in data:
+            if "Technical Analysis" in key_name:
+                points = list(data[key_name].items())
+                if points:
+                    val = float(points[0][1].get("RSI", 0))
+                    result["rsi"] = {"value": round(val, 1), "signal": "Oversold" if val < 30 else "Overbought" if val > 70 else "Neutral"}
+                break
+
+    await asyncio.sleep(15)  # Alpha Vantage: 5 calls/min = 12s between calls
+
+    # 2) MACD
+    data = await _fetch({"function": "MACD", "symbol": "AAPL", "interval": "daily", "series_type": "close"})
+    if data:
+        for key_name in data:
+            if "Technical Analysis" in key_name:
+                points = list(data[key_name].items())
+                if points:
+                    val = float(points[0][1].get("MACD", 0))
+                    result["macd"] = {"value": round(val, 2), "signal": "Bullish" if val > 0 else "Bearish"}
+                break
+
+    await asyncio.sleep(15)
+
+    # 3) BBANDS
+    data = await _fetch({"function": "BBANDS", "symbol": "AAPL", "interval": "daily", "time_period": "20", "series_type": "close"})
+    if data:
+        for key_name in data:
+            if "Technical Analysis" in key_name:
+                points = list(data[key_name].items())
+                if points:
+                    p = points[0][1]
+                    result["bbands"] = {
+                        "upper": round(float(p.get("Real Upper Band", 0)), 2),
+                        "middle": round(float(p.get("Real Middle Band", 0)), 2),
+                        "lower": round(float(p.get("Real Lower Band", 0)), 2),
+                    }
+                break
+
+    await asyncio.sleep(15)
+
+    # 4) EUR/USD forex only (save API calls)
+    data = await _fetch({"function": "CURRENCY_EXCHANGE_RATE", "from_currency": "EUR", "to_currency": "USD"})
+    if data:
+        rate_data = data.get("Realtime Currency Exchange Rate", {})
+        if rate_data:
+            result["forex"].append({
+                "pair": "EUR/USD",
+                "rate": round(float(rate_data.get("5. Exchange Rate", 0)), 4),
+            })
+
+    result["timestamp"] = _ts()
+    return result
 
 
 @app.get("/quote")
