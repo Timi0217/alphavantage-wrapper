@@ -54,13 +54,22 @@ async def _bg_fetch(params: dict):
 
 
 async def _refresh_dashboard():
-    """Background task: fetches dashboard data on startup, then every hour.
-    Makes 4 sequential upstream calls with 15s gaps to respect 5 calls/min."""
+    """Background task: fetches dashboard data on startup, then every 4 hours.
+    Makes 4 sequential upstream calls with 15s gaps to respect 5 calls/min.
+    Preserves previous data when rate-limited instead of overwriting with nulls."""
     global _dashboard_data
     await asyncio.sleep(5)  # Let server fully boot
 
     while True:
-        result = {"rsi": None, "macd": None, "bbands": None, "forex": []}
+        # Start from previous data if available (preserve on rate-limit)
+        prev = _dashboard_data
+        result = {
+            "rsi": prev.get("rsi"),
+            "macd": prev.get("macd"),
+            "bbands": prev.get("bbands"),
+            "forex": prev.get("forex", []),
+        }
+        any_success = False
 
         # 1) RSI
         data = await _bg_fetch({"function": "RSI", "symbol": "AAPL", "interval": "daily",
@@ -73,6 +82,7 @@ async def _refresh_dashboard():
                         val = float(pts[0][1].get("RSI", 0))
                         result["rsi"] = {"value": round(val, 1),
                                          "signal": "Oversold" if val < 30 else "Overbought" if val > 70 else "Neutral"}
+                        any_success = True
                     break
 
         await asyncio.sleep(15)
@@ -88,6 +98,7 @@ async def _refresh_dashboard():
                         val = float(pts[0][1].get("MACD", 0))
                         result["macd"] = {"value": round(val, 2),
                                           "signal": "Bullish" if val > 0 else "Bearish"}
+                        any_success = True
                     break
 
         await asyncio.sleep(15)
@@ -106,6 +117,7 @@ async def _refresh_dashboard():
                             "middle": round(float(p.get("Real Middle Band", 0)), 2),
                             "lower": round(float(p.get("Real Lower Band", 0)), 2),
                         }
+                        any_success = True
                     break
 
         await asyncio.sleep(15)
@@ -116,18 +128,19 @@ async def _refresh_dashboard():
         if data:
             rd = data.get("Realtime Currency Exchange Rate", {})
             if rd:
-                result["forex"].append({
+                result["forex"] = [{
                     "pair": "EUR/USD",
                     "rate": round(float(rd.get("5. Exchange Rate", 0)), 4),
-                })
+                }]
+                any_success = True
 
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
         result["status"] = "ready"
         _dashboard_data = result
         _cache_set("dashboard", result)
 
-        # Sleep 1 hour before next refresh
-        await asyncio.sleep(3600)
+        # Refresh every 4 hours (uses only 4 of 25 daily calls = ~24 calls/day)
+        await asyncio.sleep(14400)
 
 
 @asynccontextmanager
