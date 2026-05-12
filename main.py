@@ -122,25 +122,41 @@ async def _refresh_dashboard():
 
         await asyncio.sleep(15)
 
-        # 4) EUR/USD forex
-        data = await _bg_fetch({"function": "CURRENCY_EXCHANGE_RATE",
-                                "from_currency": "EUR", "to_currency": "USD"})
-        if data:
-            rd = data.get("Realtime Currency Exchange Rate", {})
-            if rd:
-                result["forex"] = [{
-                    "pair": "EUR/USD",
-                    "rate": round(float(rd.get("5. Exchange Rate", 0)), 4),
-                }]
-                any_success = True
+        # 4) Forex pairs
+        forex_pairs = [
+            ("EUR", "USD"),
+            ("GBP", "USD"),
+            ("USD", "JPY"),
+        ]
+        forex_results = list(result.get("forex", []))  # preserve previous
+        for frm, to in forex_pairs:
+            data = await _bg_fetch({"function": "CURRENCY_EXCHANGE_RATE",
+                                    "from_currency": frm, "to_currency": to})
+            if data:
+                rd = data.get("Realtime Currency Exchange Rate", {})
+                if rd:
+                    pair_name = f"{frm}/{to}"
+                    rate = round(float(rd.get("5. Exchange Rate", 0)), 4)
+                    # Update existing or append
+                    found = False
+                    for i, fx in enumerate(forex_results):
+                        if fx.get("pair") == pair_name:
+                            forex_results[i] = {"pair": pair_name, "rate": rate}
+                            found = True
+                            break
+                    if not found:
+                        forex_results.append({"pair": pair_name, "rate": rate})
+                    any_success = True
+            await asyncio.sleep(15)
 
+        result["forex"] = forex_results
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
         result["status"] = "ready"
         _dashboard_data = result
         _cache_set("dashboard", result)
 
-        # Refresh every 4 hours (uses only 4 of 25 daily calls = ~24 calls/day)
-        await asyncio.sleep(14400)
+        # Refresh every 6 hours (uses 6 calls per refresh = ~24 calls/day at 4 refreshes)
+        await asyncio.sleep(21600)
 
 
 @asynccontextmanager
@@ -161,200 +177,251 @@ HOME_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Alpha Vantage</title>
+<title>Alpha Vantage \u2014 Technical Indicators & Forex</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0a;color:#fff;padding:40px 20px;line-height:1.5}
-.container{max-width:640px;margin:0 auto;opacity:0;animation:fadeIn 0.6s forwards}
+body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0a0a0a;color:#e8e8e8;padding:40px 20px;line-height:1.5}
+.container{max-width:680px;margin:0 auto;opacity:0;animation:fadeIn .5s ease forwards}
 @keyframes fadeIn{to{opacity:1}}
-.card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:16px;padding:24px;margin-bottom:20px}
-.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.title{font-family:'Courier New',monospace;font-size:28px;color:#9B59B6;font-weight:700}
-.health{font-family:'Courier New',monospace;font-size:13px;color:#555;display:flex;align-items:center;gap:6px}
-.health .d{width:8px;height:8px;border-radius:50%;background:#555;transition:background .3s}
-.health .d.on{background:#4CAF50}
-.subtitle{color:#888;font-size:14px;margin-bottom:24px}
-.gauge-grid{display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:20px}
-.gauge-card{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;text-align:center}
-.gauge-card.blue-border{border-color:rgba(91,155,213,0.3)}
-.gauge-card.green-border{border-color:rgba(76,175,80,0.3)}
-.gauge-card.red-border{border-color:rgba(239,83,80,0.3)}
-.gauge-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px}
-.gauge-value{font-size:32px;font-weight:700;margin-bottom:4px}
-.gauge-value.blue{color:#5B9BD5}
-.gauge-value.green{color:#4CAF50}
-.gauge-value.red{color:#ef5350}
-.gauge-signal{font-size:13px;margin-bottom:12px}
-.gauge-signal.green{color:#4CAF50}
-.gauge-signal.red{color:#ef5350}
-.gauge-signal.neutral{color:#888}
-.progress-bar{width:100%;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden}
-.progress-fill{height:100%;border-radius:2px;transition:width 0.3s}
-.progress-fill.blue{background:#5B9BD5}
-.progress-fill.green{background:#4CAF50}
-.progress-fill.red{background:#ef5350}
-.section-title{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#888;margin-bottom:12px;font-weight:600}
-.forex-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
-.forex-row:last-child{border-bottom:none}
-.forex-pair{color:#ccc;font-weight:500}
-.forex-rate{font-family:'Courier New',monospace;font-size:16px;color:#fff}
-.forex-change{font-size:13px;font-weight:600}
-.forex-change.positive{color:#4CAF50}
-.forex-change.negative{color:#ef5350}
-.form-section{margin-top:24px}
-.input-group{display:flex;gap:8px;margin-bottom:12px}
-.input-field{flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 16px;color:#fff;font-size:14px}
-.input-field:focus{outline:none;border-color:#9B59B6}
-.btn{background:#9B59B6;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:14px;font-weight:600;cursor:pointer;transition:background 0.2s}
-.btn:hover{background:#8e44ad}
-.try-suggestions{display:flex;gap:8px;flex-wrap:wrap}
-.try-chip{background:rgba(255,255,255,0.05);color:#888;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;transition:all 0.2s}
-.try-chip:hover{background:rgba(155,89,182,0.2);color:#9B59B6}
-.error-msg{color:#ef5350;font-size:12px;margin-top:8px}
-.loading{color:#888;font-size:13px;text-align:center;padding:12px}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:.6}50%{opacity:.25}}
+
+/* Header */
+.header-card{background:linear-gradient(135deg,rgba(120,60,170,.15),rgba(80,40,130,.08));border:1px solid rgba(155,89,182,.15);border-radius:20px;padding:28px;margin-bottom:14px;overflow:hidden}
+.header-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-icon{width:42px;height:42px;background:linear-gradient(135deg,#9B59B6,#7D3C98);border-radius:10px;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;font-weight:900;font-size:18px;color:#fff}
+.brand-text .title{font-size:22px;font-weight:700;color:#fff;letter-spacing:-.5px}
+.brand-text .org{font-size:12px;color:rgba(155,89,182,.8);font-weight:500;letter-spacing:.5px}
+.health-badge{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:6px 14px;font-size:12px;color:#888}
+.health-dot{width:7px;height:7px;background:#555;border-radius:50%;transition:background .3s}
+.health-dot.on{background:#4CAF50;box-shadow:0 0 8px rgba(76,175,80,.4)}
+.tagline{color:#888;font-size:14px;margin-bottom:20px;margin-left:54px}
+.symbol-tag{display:inline-block;background:rgba(155,89,182,.12);color:#9B59B6;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:3px 10px;border-radius:6px;margin-left:54px;margin-bottom:20px}
+
+/* Indicator grid */
+.ind-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px}
+.ind-card{background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:18px;text-align:center;transition:all .2s}
+.ind-card:hover{background:rgba(155,89,182,.04);border-color:rgba(155,89,182,.15)}
+.ind-label{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:1.2px;font-weight:600;margin-bottom:12px}
+.ind-val{font-family:'Courier New',monospace;font-size:30px;font-weight:700;color:#fff;line-height:1;margin-bottom:6px}
+.ind-signal{font-size:11px;font-weight:600;margin-bottom:10px}
+.ind-signal.bullish{color:#4CAF50}
+.ind-signal.bearish{color:#ef5350}
+.ind-signal.neutral{color:#888}
+.ind-signal.overbought{color:#ef5350}
+.ind-signal.oversold{color:#4CAF50}
+
+/* RSI gauge bar */
+.gauge{width:100%;height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden;position:relative}
+.gauge-fill{height:100%;border-radius:3px;transition:width .6s ease}
+.gauge-zones{position:absolute;top:0;left:0;right:0;bottom:0;display:flex}
+.gauge-zone{flex:1}
+.gauge-zone.low{background:rgba(76,175,80,.15)}
+.gauge-zone.mid{background:rgba(255,255,255,.03)}
+.gauge-zone.high{background:rgba(239,83,80,.15)}
+.gauge-marker{position:absolute;top:-2px;width:3px;height:10px;background:#fff;border-radius:2px;transition:left .6s ease;box-shadow:0 0 4px rgba(255,255,255,.5)}
+
+/* Band visualization */
+.band-viz{display:flex;align-items:center;gap:4px;justify-content:center;margin-top:4px}
+.band-bar{height:4px;border-radius:2px;transition:width .3s}
+.band-label{font-size:9px;color:#555;font-family:'Courier New',monospace}
+
+/* Forex section */
+.forex-section{margin-top:4px}
+.forex-grid{display:grid;grid-template-columns:1fr;gap:1px;background:rgba(255,255,255,.03);border-radius:12px;overflow:hidden}
+.forex-row{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;background:#0a0a0a;transition:background .2s}
+.forex-row:hover{background:rgba(155,89,182,.03)}
+.forex-pair{font-size:13px;color:#aaa;font-weight:500;display:flex;align-items:center;gap:8px}
+.forex-flag{font-size:16px}
+.forex-rate{font-family:'Courier New',monospace;font-size:18px;color:#fff;font-weight:600}
+
+/* Cards */
+.card{background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:20px 24px;margin-bottom:12px;animation:slideUp .5s ease backwards}
+.section-label{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1.5px;font-weight:600;margin-bottom:14px}
+
+/* Indicator selector */
+.ind-select{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.ind-chip{background:rgba(255,255,255,.04);color:#777;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s;border:1px solid transparent}
+.ind-chip:hover{background:rgba(155,89,182,.1);color:#9B59B6;border-color:rgba(155,89,182,.2)}
+.ind-chip.active{background:rgba(155,89,182,.15);color:#9B59B6;border-color:rgba(155,89,182,.3)}
+
+/* Search */
+.search-row{display:flex;gap:8px;margin-bottom:10px}
+.search-input{flex:1;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:11px 16px;color:#fff;font-size:14px;outline:none;transition:all .2s;font-family:inherit}
+.search-input:focus{border-color:rgba(155,89,182,.5);background:rgba(255,255,255,.06);box-shadow:0 0 0 3px rgba(155,89,182,.1)}
+.search-input::placeholder{color:#444}
+.search-btn{background:linear-gradient(135deg,#9B59B6,#7D3C98);color:#fff;border:none;border-radius:10px;padding:11px 20px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;white-space:nowrap}
+.search-btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(155,89,182,.3)}
+#result{margin-top:14px;padding:14px;background:rgba(155,89,182,.06);border:1px solid rgba(155,89,182,.15);border-radius:10px;font-family:'Courier New',monospace;font-size:12px;color:#999;white-space:pre-wrap;word-wrap:break-word;display:none;max-height:280px;overflow-y:auto}
+.warm{animation:pulse 2s infinite}
 </style>
 </head>
 <body>
 <div class="container">
-<div class="card">
-<div class="header">
+
+<div class="header-card">
+<div class="header-row">
+<div class="brand">
+<div class="brand-icon">AV</div>
+<div class="brand-text">
 <div class="title">Alpha Vantage</div>
-<div class="health"><span class="d" id="dot"></span><span id="health-text">connecting...</span></div>
+<div class="org">Technical Analysis & Forex</div>
 </div>
-<div class="subtitle">50+ technical indicators, forex pairs, intraday data</div>
+</div>
+<div class="health-badge"><span class="health-dot" id="dot"></span><span id="ht">checking...</span></div>
+</div>
+<div class="tagline">50+ technical indicators, forex pairs &amp; intraday data</div>
+<div class="symbol-tag">AAPL \u00b7 Daily</div>
 
-<div class="gauge-grid" id="gauges">
-<div class="gauge-card blue-border">
-<div class="gauge-label">RSI (14)</div>
-<div class="loading">Loading...</div>
-</div>
-<div class="gauge-card green-border">
-<div class="gauge-label">MACD</div>
-<div class="loading">Loading...</div>
-</div>
-<div class="gauge-card red-border">
-<div class="gauge-label">BOLLINGER</div>
-<div class="loading">Loading...</div>
-</div>
+<div class="ind-grid" id="indicators">
+<div class="ind-card"><div class="ind-label">RSI (14)</div><div class="ind-val warm">\u2014</div><div class="ind-signal neutral">Loading...</div><div class="gauge"><div class="gauge-fill" style="width:0"></div></div></div>
+<div class="ind-card"><div class="ind-label">MACD</div><div class="ind-val warm">\u2014</div><div class="ind-signal neutral">Loading...</div></div>
+<div class="ind-card"><div class="ind-label">Bollinger</div><div class="ind-val warm" style="font-size:16px">\u2014</div><div class="ind-signal neutral">Loading...</div></div>
 </div>
 
-<div class="section-title">FOREX RATES</div>
-<div id="forex">
-<div class="loading">Loading forex rates...</div>
+<div class="forex-section">
+<div class="section-label">Forex Rates</div>
+<div class="forex-grid" id="forex">
+<div class="forex-row"><div class="forex-pair">Loading...</div><div class="forex-rate">\u2014</div></div>
+</div>
+</div>
 </div>
 
-<div class="form-section">
-<div class="input-group">
-<input type="text" class="input-field" id="symbolInput" placeholder="AAPL" value="AAPL">
-<button class="btn" onclick="fetchIndicator()">\\u2192 indicators</button>
+<div class="card" style="animation-delay:.15s">
+<div class="section-label">Fetch Indicator</div>
+<div class="search-row">
+<input type="text" class="search-input" id="symbolInput" placeholder="Symbol (e.g. AAPL, MSFT, TSLA)" value="AAPL">
+<button class="search-btn" id="fetchBtn">Fetch \u2192</button>
 </div>
-<div class="try-suggestions">
-<span style="color:#666;font-size:12px;margin-right:4px">Try:</span>
-<div class="try-chip" onclick="setIndicator('RSI')">RSI</div>
-<div class="try-chip" onclick="setIndicator('MACD')">MACD</div>
-<div class="try-chip" onclick="setIndicator('BBANDS')">BBANDS</div>
-<div class="try-chip" onclick="setIndicator('SMA')">SMA</div>
-<div class="try-chip" onclick="setIndicator('EMA')">EMA</div>
+<div class="ind-select" id="indSelect">
+<span class="ind-chip active" data-ind="RSI">RSI</span>
+<span class="ind-chip" data-ind="MACD">MACD</span>
+<span class="ind-chip" data-ind="BBANDS">BBANDS</span>
+<span class="ind-chip" data-ind="SMA">SMA</span>
+<span class="ind-chip" data-ind="EMA">EMA</span>
+<span class="ind-chip" data-ind="STOCH">STOCH</span>
+<span class="ind-chip" data-ind="ADX">ADX</span>
+<span class="ind-chip" data-ind="ATR">ATR</span>
 </div>
 <div id="result"></div>
 </div>
-</div>
+
 </div>
 
 <script>
-let currentIndicator = 'RSI';
+var currentInd = 'RSI';
 
-function renderDashboard(dash) {
-  const container = document.getElementById('gauges');
-  const warming = dash.status === 'warming_up';
+function renderDash(d) {
+  var w = d.status === 'warming_up';
+  var g = document.getElementById('indicators');
 
   // RSI
-  const rsi = dash.rsi;
-  const rsiVal = rsi ? rsi.value : (warming ? '...' : 'N/A');
-  const rsiSig = rsi ? rsi.signal : (warming ? 'Warming up' : 'No data');
-  const rsiCls = rsi ? (rsi.value < 30 ? 'green' : rsi.value > 70 ? 'red' : 'neutral') : 'neutral';
-  const rsiProg = rsi ? rsi.value : 0;
+  var rsi = d.rsi;
+  var rV = rsi ? rsi.value.toFixed(1) : (w ? '...' : '\u2014');
+  var rSig = rsi ? rsi.signal : (w ? 'Loading...' : 'No data');
+  var rCls = rsi ? (rsi.value > 70 ? 'overbought' : rsi.value < 30 ? 'oversold' : 'neutral') : 'neutral';
+  var rPct = rsi ? rsi.value : 50;
 
   // MACD
-  const macd = dash.macd;
-  const macdVal = macd ? ((macd.value > 0 ? '+' : '') + macd.value) : (warming ? '...' : 'N/A');
-  const macdSig = macd ? macd.signal : (warming ? 'Warming up' : 'No data');
-  const macdColor = macd && macd.value > 0 ? 'green' : 'red';
-  const macdCls = macd ? (macd.value > 0 ? 'green' : 'red') : 'neutral';
+  var macd = d.macd;
+  var mV = macd ? ((macd.value > 0 ? '+' : '') + macd.value.toFixed(2)) : (w ? '...' : '\u2014');
+  var mSig = macd ? macd.signal : (w ? 'Loading...' : 'No data');
+  var mCls = macd ? (macd.value > 0 ? 'bullish' : 'bearish') : 'neutral';
 
-  // BBANDS
-  const bb = dash.bbands;
-  const bbVal = bb ? ('$' + bb.upper + ' / $' + bb.lower) : (warming ? '...' : 'N/A');
+  // Bollinger Bands
+  var bb = d.bbands;
+  var bV = bb ? '$' + bb.middle.toFixed(0) : (w ? '...' : '\u2014');
+  var bSig = bb ? '$' + bb.lower.toFixed(0) + ' \u2014 $' + bb.upper.toFixed(0) : (w ? 'Loading...' : 'No data');
+  var bRange = bb ? bb.upper - bb.lower : 0;
+  var bWidth = bb ? ((bb.upper - bb.lower) / bb.middle * 100).toFixed(1) : 0;
 
-  container.innerHTML =
-    '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="gauge-value blue">' + rsiVal + '</div><div class="gauge-signal ' + rsiCls + '">' + rsiSig + '</div><div class="progress-bar"><div class="progress-fill blue" style="width:' + rsiProg + '%"></div></div></div>' +
-    '<div class="gauge-card ' + macdColor + '-border"><div class="gauge-label">MACD</div><div class="gauge-value ' + macdColor + '">' + macdVal + '</div><div class="gauge-signal ' + macdCls + '">' + macdSig + '</div><div class="progress-bar"><div class="progress-fill ' + macdColor + '" style="width:65%"></div></div></div>' +
-    '<div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="gauge-value red" style="font-size:20px">' + bbVal + '</div><div class="gauge-signal neutral">Band range</div><div class="progress-bar"><div class="progress-fill red" style="width:85%"></div></div></div>';
+  g.innerHTML =
+    '<div class="ind-card"><div class="ind-label">RSI (14)</div>' +
+    '<div class="ind-val' + (w && !rsi ? ' warm' : '') + '">' + rV + '</div>' +
+    '<div class="ind-signal ' + rCls + '">' + rSig + '</div>' +
+    '<div class="gauge" style="position:relative"><div class="gauge-zones"><div class="gauge-zone low"></div><div class="gauge-zone mid"></div><div class="gauge-zone high"></div></div>' +
+    (rsi ? '<div class="gauge-marker" style="left:' + Math.min(97, rPct) + '%"></div>' : '') +
+    '</div></div>' +
+
+    '<div class="ind-card"><div class="ind-label">MACD</div>' +
+    '<div class="ind-val' + (w && !macd ? ' warm' : '') + '">' + mV + '</div>' +
+    '<div class="ind-signal ' + mCls + '">' + mSig + '</div></div>' +
+
+    '<div class="ind-card"><div class="ind-label">Bollinger</div>' +
+    '<div class="ind-val' + (w && !bb ? ' warm' : '') + '" style="font-size:22px">' + bV + '</div>' +
+    '<div class="ind-signal neutral">' + bSig + '</div>' +
+    (bb ? '<div style="text-align:center;margin-top:6px"><span style="font-size:10px;color:#555;font-family:monospace">Width: ' + bWidth + '%</span></div>' : '') +
+    '</div>';
 
   // Forex
-  const forexContainer = document.getElementById('forex');
-  if (dash.forex && dash.forex.length) {
-    forexContainer.innerHTML = '';
-    dash.forex.forEach(function(fx) {
-      forexContainer.innerHTML += '<div class="forex-row"><div class="forex-pair">' + fx.pair + '</div><div class="forex-rate">' + fx.rate.toFixed(4) + '</div><div class="forex-change neutral">\\u2014</div></div>';
-    });
+  var fx = document.getElementById('forex');
+  if (d.forex && d.forex.length) {
+    var flags = {'EUR/USD':'\\ud83c\\uddea\\ud83c\\uddfa','GBP/USD':'\\ud83c\\uddec\\ud83c\\udde7','USD/JPY':'\\ud83c\\uddef\\ud83c\\uddf5'};
+    fx.innerHTML = d.forex.map(function(f) {
+      return '<div class="forex-row"><div class="forex-pair">' + (flags[f.pair]||'') + ' ' + f.pair + '</div><div class="forex-rate">' + f.rate.toFixed(4) + '</div></div>';
+    }).join('');
   } else {
-    forexContainer.innerHTML = '<div style="color:#666;font-size:13px;padding:8px 0">' + (warming ? 'Warming up...' : 'No forex data') + '</div>';
+    fx.innerHTML = '<div class="forex-row"><div class="forex-pair" style="color:#555">' + (w ? 'Loading...' : 'No data') + '</div><div class="forex-rate">\u2014</div></div>';
   }
 }
 
 async function init() {
-  const t0 = Date.now();
+  var t0 = Date.now();
   try {
     await fetch('/health');
-    const ms = Date.now() - t0;
     document.getElementById('dot').classList.add('on');
-    document.getElementById('health-text').textContent = 'online \\u00B7 ' + ms + 'ms';
-  } catch (e) {
-    document.getElementById('health-text').textContent = 'offline';
+    document.getElementById('ht').textContent = 'online \u00b7 ' + (Date.now()-t0) + 'ms';
+  } catch(e) {
+    document.getElementById('ht').textContent = 'offline';
   }
 
-  // All homepage data from background-refreshed cache
   try {
-    const dash = await fetch('/dashboard').then(r => r.json());
-    renderDashboard(dash);
-    // If still warming up, poll every 10s until ready
-    if (dash.status === 'warming_up') {
-      const poll = setInterval(async function() {
-        try {
-          const d2 = await fetch('/dashboard').then(r => r.json());
-          renderDashboard(d2);
-          if (d2.status === 'ready') clearInterval(poll);
-        } catch(e) { clearInterval(poll); }
-      }, 10000);
+    var d = await fetch('/dashboard').then(function(r){return r.json()});
+    renderDash(d);
+    if (d.status === 'warming_up') {
+      var poll = setInterval(async function() {
+        try { var d2 = await fetch('/dashboard').then(function(r){return r.json()}); renderDash(d2); if (d2.status==='ready') clearInterval(poll); } catch(e) { clearInterval(poll); }
+      }, 8000);
     }
-  } catch (e) {
-    document.getElementById('gauges').innerHTML = '<div class="gauge-card blue-border"><div class="gauge-label">RSI (14)</div><div class="loading">Unavailable</div></div><div class="gauge-card green-border"><div class="gauge-label">MACD</div><div class="loading">Unavailable</div></div><div class="gauge-card red-border"><div class="gauge-label">BOLLINGER</div><div class="loading">Unavailable</div></div>';
-  }
+  } catch(e) { /* leave loading state */ }
 }
 
-function setIndicator(indicator) {
-  currentIndicator = indicator;
-  document.getElementById('result').innerHTML = '<div style="color:#9B59B6;font-size:12px;margin-top:8px">Selected: ' + indicator + '</div>';
-}
+// Indicator chips
+document.getElementById('indSelect').addEventListener('click', function(e) {
+  var chip = e.target.closest('.ind-chip');
+  if (!chip) return;
+  document.querySelectorAll('.ind-chip').forEach(function(c){c.classList.remove('active')});
+  chip.classList.add('active');
+  currentInd = chip.getAttribute('data-ind');
+});
 
-async function fetchIndicator() {
-  const symbol = document.getElementById('symbolInput').value.trim().toUpperCase() || 'AAPL';
-  const resultDiv = document.getElementById('result');
-  resultDiv.innerHTML = '<div class="loading">Fetching...</div>';
+// Fetch button
+document.getElementById('fetchBtn').addEventListener('click', doFetch);
+document.getElementById('symbolInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); doFetch(); }
+});
+
+async function doFetch() {
+  var symbol = document.getElementById('symbolInput').value.trim().toUpperCase() || 'AAPL';
+  var r = document.getElementById('result');
+  r.style.display = 'block';
+  r.style.color = '#9B59B6';
+  r.textContent = 'Fetching ' + currentInd + ' for ' + symbol + '...';
   try {
-    const res = await fetch('/technical?symbol=' + symbol + '&indicator=' + currentIndicator);
-    const data = await res.json();
+    var res = await fetch('/technical?symbol=' + symbol + '&indicator=' + currentInd);
+    var data = await res.json();
+    if (data.detail) { r.style.color = '#ef5350'; r.textContent = 'Error: ' + data.detail; return; }
     if (data.data && data.data.length > 0) {
-      const point = data.data[0];
-      const keys = Object.keys(point).filter(function(k) { return k !== 'date'; });
-      const valueStr = keys.map(function(k) { return k + ': ' + (typeof point[k] === 'number' ? point[k].toFixed(2) : point[k]); }).join(', ');
-      resultDiv.innerHTML = '<div style="margin-top:12px;padding:12px;background:rgba(155,89,182,0.1);border-radius:8px;font-size:12px"><div style="color:#9B59B6;font-weight:600;margin-bottom:4px">' + symbol + ' - ' + currentIndicator + '</div><div style="color:#ccc">' + valueStr + '</div><div style="color:#666;margin-top:4px;font-size:11px">Date: ' + point.date + '</div></div>';
+      r.style.color = '#999';
+      r.textContent = JSON.stringify(data, null, 2);
     } else {
-      resultDiv.innerHTML = '<div class="error-msg">No data available</div>';
+      r.style.color = '#ef5350';
+      r.textContent = 'No data available';
     }
-  } catch (e) {
-    resultDiv.innerHTML = '<div class="error-msg">Error fetching data</div>';
+  } catch(e) {
+    r.style.color = '#ef5350';
+    r.textContent = 'Error: ' + e.message;
   }
 }
 
