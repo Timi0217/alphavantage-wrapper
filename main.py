@@ -272,18 +272,18 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background
 <div class="health-badge"><span class="health-dot" id="dot"></span><span id="ht">checking...</span></div>
 </div>
 <div class="tagline">50+ technical indicators, forex pairs &amp; intraday data</div>
-<div class="symbol-tag">AAPL \u00b7 Daily</div>
+<div class="symbol-tag">AAPL &middot; Daily</div>
 
 <div class="ind-grid" id="indicators">
-<div class="ind-card"><div class="ind-label">RSI (14)</div><div class="ind-val warm">\u2014</div><div class="ind-signal neutral">Loading...</div><div class="gauge"><div class="gauge-fill" style="width:0"></div></div></div>
-<div class="ind-card"><div class="ind-label">MACD</div><div class="ind-val warm">\u2014</div><div class="ind-signal neutral">Loading...</div></div>
-<div class="ind-card"><div class="ind-label">Bollinger</div><div class="ind-val warm" style="font-size:16px">\u2014</div><div class="ind-signal neutral">Loading...</div></div>
+<div class="ind-card"><div class="ind-label">RSI (14)</div><div class="ind-val warm">&mdash;</div><div class="ind-signal neutral">Loading...</div><div class="gauge"><div class="gauge-fill" style="width:0"></div></div></div>
+<div class="ind-card"><div class="ind-label">MACD</div><div class="ind-val warm">&mdash;</div><div class="ind-signal neutral">Loading...</div></div>
+<div class="ind-card"><div class="ind-label">Bollinger</div><div class="ind-val warm" style="font-size:16px">&mdash;</div><div class="ind-signal neutral">Loading...</div></div>
 </div>
 
 <div class="forex-section">
 <div class="section-label">Forex Rates</div>
 <div class="forex-grid" id="forex">
-<div class="forex-row"><div class="forex-pair">Loading...</div><div class="forex-rate">\u2014</div></div>
+<div class="forex-row"><div class="forex-pair">Loading...</div><div class="forex-rate">&mdash;</div></div>
 </div>
 </div>
 </div>
@@ -292,7 +292,7 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background
 <div class="section-label">Fetch Indicator</div>
 <div class="search-row">
 <input type="text" class="search-input" id="symbolInput" placeholder="Symbol (e.g. AAPL, MSFT, TSLA)" value="AAPL">
-<button class="search-btn" id="fetchBtn">Fetch \u2192</button>
+<button class="search-btn" id="fetchBtn">Fetch &rarr;</button>
 </div>
 <div class="ind-select" id="indSelect">
 <span class="ind-chip active" data-ind="RSI">RSI</span>
@@ -362,7 +362,7 @@ function renderDash(d) {
       return '<div class="forex-row"><div class="forex-pair">' + (flags[f.pair]||'') + ' ' + f.pair + '</div><div class="forex-rate">' + f.rate.toFixed(4) + '</div></div>';
     }).join('');
   } else {
-    fx.innerHTML = '<div class="forex-row"><div class="forex-pair" style="color:#555">' + (w ? 'Loading...' : 'No data') + '</div><div class="forex-rate">\u2014</div></div>';
+    fx.innerHTML = '<div class="forex-row"><div class="forex-pair" style="color:#555">' + (w ? 'Loading...' : 'No data') + '</div><div class="forex-rate">&mdash;</div></div>';
   }
 }
 
