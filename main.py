@@ -357,7 +357,7 @@ function renderDash(d) {
   // Forex
   var fx = document.getElementById('forex');
   if (d.forex && d.forex.length) {
-    var flags = {'EUR/USD':'\\ud83c\\uddea\\ud83c\\uddfa','GBP/USD':'\\ud83c\\uddec\\ud83c\\udde7','USD/JPY':'\\ud83c\\uddef\\ud83c\\uddf5'};
+    var flags = {'EUR/USD':'🇪🇺','GBP/USD':'🇬🇧','USD/JPY':'🇯🇵'};
     fx.innerHTML = d.forex.map(function(f) {
       return '<div class="forex-row"><div class="forex-pair">' + (flags[f.pair]||'') + ' ' + f.pair + '</div><div class="forex-rate">' + f.rate.toFixed(4) + '</div></div>';
     }).join('');
